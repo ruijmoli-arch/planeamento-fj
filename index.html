@@ -684,9 +684,18 @@ function calcRag(acaoId){
 async function loadAll(){
   showNotif('A carregar dados...','info');
   try{
+    // Diagnóstico: verificar campos disponíveis na Factorial_Tarefas
+    try{
+      const diag=await spRead(`${SP}/_api/web/lists/getbytitle('Factorial_Tarefas')/items?$top=1`);
+      if(diag.d.results.length){
+        const campos=Object.keys(diag.d.results[0]).filter(k=>!k.startsWith('odata'));
+        console.log('Campos Factorial_Tarefas:', campos.join(', '));
+      }
+    }catch(e){console.warn('Diagnóstico falhou',e);}
+
     await Promise.all([loadProjetos(),loadAcoes(),loadTarefas(),loadKPIDefs(),loadKPIRegs(),loadPlanoTrim()]);
     renderDash();renderHier();renderTrim();renderSem();renderKdefs();renderKregs();populateDrops();
-    showNotif('Dados carregados!','success');
+    showNotif(`Dados carregados! ${tarefas.length} tarefas · ${projetos.length} projetos · ${acoes.length} ações`,'success');
   }catch(e){showNotif('Erro ao carregar: '+e.message,'error');console.error(e);}
 }
 async function loadProjetos(){
@@ -703,24 +712,59 @@ async function loadAcoes(){
 }
 async function loadTarefas(){
   let all=[];
-  // Factorial Tarefas
+  // Factorial_Tarefas — sem expand, responsavel vem de campo texto se existir
   try{
-    const d=await spRead(`${SP}/_api/web/lists/getbytitle('Factorial_Tarefas')/items?$select=*,Responsavel/Title,Responsavel/EMail,AttachmentFiles&$expand=Responsavel,AttachmentFiles&$orderby=DataLimite asc&$top=2000`);
-    const ft=d.d.results.map(r=>({id:'f_'+r.Id,spId:r.Id,titulo:r.Title||'',estado:r.Estado||'todo',dataLimite:r.DataLimite?r.DataLimite.split('T')[0]:'',semana:r.Semana||null,anoFJ:r.AnoFJ||null,origem:r.Origem||'Plano',prioridade:r.Prioridade||'Média',projetoId:r.ProjetoId||null,acaoId:r.AcaoId||null,responsavel:r.Responsavel?.Title||'',responsavelEmail:r.Responsavel?.EMail||'',dep:r.Departamento||'',lista:'Factorial_Tarefas',attachments:(r.AttachmentFiles?.results||[]).map(a=>({name:a.FileName,url:a.ServerRelativeUrl}))}));
+    const d=await spRead(`${SP}/_api/web/lists/getbytitle('Factorial_Tarefas')/items?$select=Id,Title,Estado,DataLimite,Semana,AnoFJ,Origem,Prioridade,ProjetoId,AcaoId,Departamento,ReuniaoID,AttachmentFiles&$expand=AttachmentFiles&$orderby=DataLimite asc&$top=2000`);
+    const ft=d.d.results.map(r=>({
+      id:'f_'+r.Id,spId:r.Id,titulo:r.Title||'',
+      estado:r.Estado||'todo',
+      dataLimite:r.DataLimite?r.DataLimite.split('T')[0]:'',
+      semana:r.Semana||null,anoFJ:r.AnoFJ||null,
+      origem:r.Origem||'Plano',
+      prioridade:r.Prioridade||'Média',
+      projetoId:r.ProjetoId||null,
+      acaoId:r.AcaoId||null,
+      responsavel:'',responsavelEmail:'',
+      dep:r.Departamento||'',
+      lista:'Factorial_Tarefas',
+      attachments:(r.AttachmentFiles?.results||[]).map(a=>({name:a.FileName,url:a.ServerRelativeUrl}))
+    }));
     all=[...all,...ft];
-  }catch(e){console.warn('Factorial_Tarefas error',e);}
-  // FJ_Tarefas (reuniões externas)
+    console.log(`✓ Factorial_Tarefas: ${ft.length} tarefas`);
+  }catch(e){console.warn('Factorial_Tarefas error:',e.message);}
+
+  // FJ_Tarefas (tarefas de reuniões externas)
   try{
     const d=await spRead(`${SP}/_api/web/lists/getbytitle('FJ_Tarefas')/items?$select=*,AttachmentFiles&$expand=AttachmentFiles&$orderby=DataLimite asc&$top=2000`);
-    const rt=d.d.results.map(r=>({id:'r_'+r.Id,spId:r.Id,titulo:r.Title||'',estado:r.Estado||'todo',dataLimite:r.DataLimite?r.DataLimite.split('T')[0]:'',semana:r.Semana||null,anoFJ:r.Ano||null,origem:'Reunião',prioridade:r.Prioridade||'Média',projetoId:null,acaoId:null,responsavel:r.Responsavel||'',responsavelEmail:'',dep:r.Departamento||'',lista:'FJ_Tarefas',attachments:(r.AttachmentFiles?.results||[]).map(a=>({name:a.FileName,url:a.ServerRelativeUrl}))}));
+    const rt=d.d.results.map(r=>({
+      id:'r_'+r.Id,spId:r.Id,
+      titulo:r.Title||'',
+      estado:r.Estado||'todo',
+      dataLimite:r.DataLimite?r.DataLimite.split('T')[0]:'',
+      semana:r.Semana||null,anoFJ:r.Ano||null,
+      origem:'Reunião',
+      prioridade:r.Prioridade||'Média',
+      projetoId:null,acaoId:null,
+      responsavel:r.Responsavel||r.Descricao||'',
+      responsavelEmail:'',
+      dep:r.Departamento||'',
+      lista:'FJ_Tarefas',
+      attachments:(r.AttachmentFiles?.results||[]).map(a=>({name:a.FileName,url:a.ServerRelativeUrl}))
+    }));
     all=[...all,...rt];
-  }catch(e){console.warn('FJ_Tarefas not found or error',e);}
-  // Calculate semana from dataLimite where missing
+    console.log(`✓ FJ_Tarefas: ${rt.length} tarefas`);
+  }catch(e){console.warn('FJ_Tarefas não encontrada (normal se não existir):',e.message);}
+
+  // Calcular semana ISO a partir de dataLimite onde semana/ano estejam em falta
   all=all.map(t=>{
-    if(!t.semana&&t.dataLimite){t.semana=isoWeek(new Date(t.dataLimite));t.anoFJ=new Date(t.dataLimite).getFullYear();}
+    if((!t.semana||!t.anoFJ)&&t.dataLimite){
+      const d=new Date(t.dataLimite+'T12:00:00');
+      t.semana=isoWeek(d);t.anoFJ=d.getFullYear();
+    }
     return t;
   });
   tarefas=all;
+  console.log(`Total tarefas carregadas: ${tarefas.length}`);
 }
 async function loadKPIDefs(){
   const d=await spRead(`${SP}/_api/web/lists/getbytitle('KPI_Definicoes')/items?$select=*&$orderby=Title asc&$top=500`);
