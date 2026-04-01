@@ -297,9 +297,37 @@ tr.done-row td:nth-child(2){text-decoration:line-through}
       <!-- HIERARQUIA -->
       <div id="page-hierarquia" class="page">
         <div class="page-title">Projetos &amp; Ações</div>
+        <!-- Formulário de nova ação -->
+        <div id="frm-acao-ov" class="overlay">
+          <div class="panel">
+            <div class="panel-title" id="frm-acao-title">Nova ação</div>
+            <div class="fgrid">
+              <div class="fg" style="grid-column:span 2"><label>Nome da ação *</label><input id="fa-nome" placeholder="Nome da ação"></div>
+              <div class="fg"><label>Projeto (Factorial) *</label><select id="fa-proj"><option value="">Selecionar...</option></select></div>
+              <div class="fg"><label>Tipo</label><select id="fa-tipo"><option value="Recorrente">Recorrente</option><option value="INOV">INOV</option></select></div>
+              <div class="fg"><label>Departamento</label><select id="fa-dep"><option value="">—</option><option>CAdm</option><option>Gestão</option><option>Op.Norte</option><option>Op.Sul</option><option>Financeiro</option><option>Impacto</option></select></div>
+              <div class="fg"><label>Estado</label><select id="fa-estado"><option>Ativo</option><option>Concluído</option><option>Pausado</option><option>Cancelado</option></select></div>
+              <div class="fg"><label>Data de início</label><input id="fa-inicio" type="date"></div>
+              <div class="fg"><label>Data de fim</label><input id="fa-fim" type="date"></div>
+              <div class="fg people-wrap">
+                <label>Responsável</label>
+                <input id="fa-resp" placeholder="Nome..." autocomplete="off" oninput="searchPeople(this.value,'fa-sug','fa-resp','fa-resp-email')">
+                <input id="fa-resp-email" type="hidden">
+                <div id="fa-sug" class="people-sugg"></div>
+              </div>
+              <div class="fg"></div>
+              <div class="fg" style="grid-column:span 2"><label>Notas</label><textarea id="fa-notas"></textarea></div>
+            </div>
+            <div class="panel-footer">
+              <button class="btn" onclick="closeAcaoForm()">Cancelar</button>
+              <button class="btn btn-primary" id="save-acao-btn" onclick="saveAcao()">Guardar</button>
+            </div>
+          </div>
+        </div>
         <div class="toolbar">
           <select class="flt" id="ff-h-dep" onchange="renderHier()"><option value="">Todos os departamentos</option><option>CAdm</option><option>Gestão</option><option>Op.Norte</option><option>Op.Sul</option><option>Financeiro</option><option>Impacto</option></select>
           <select class="flt" id="ff-h-tipo" onchange="renderHier()"><option value="">Inovação + Recorrente</option><option value="INOV">Só Inovação</option><option value="Recorrente">Só Recorrente</option></select>
+          <button class="btn btn-primary" onclick="openAcaoForm()">+ Nova ação</button>
         </div>
         <div id="hier-container"></div>
       </div>
@@ -662,12 +690,14 @@ async function loadAll(){
   }catch(e){showNotif('Erro ao carregar: '+e.message,'error');console.error(e);}
 }
 async function loadProjetos(){
-  const d=await spRead(`${SP}/_api/web/lists/getbytitle('Projetos')/items?$select=*&$orderby=Title asc&$top=500`);
-  projetos=d.d.results.map(r=>({id:r.Id,nome:r.Title||'',dep:r.Departamento||'',estado:r.Estado||'',ano:r.Ano||null,desc:r.Descricao||''}));
+  // Factorial_Projetos = projetos top-level (vindos do Factorial)
+  const d=await spRead(`${SP}/_api/web/lists/getbytitle('Factorial_Projetos')/items?$select=*&$orderby=Title asc&$top=1000`);
+  projetos=d.d.results.map(r=>({id:r.Id,nome:r.Title||'',dep:r.Departamento||'',estado:r.Estado||'active',dataInicio:r.DataInicio?r.DataInicio.split('T')[0]:'',dataFim:r.DataFim?r.DataFim.split('T')[0]:'',desc:r.Descricao||'',tipoFJ:r.Tipo_FJ||(r.Title?.includes('(INOV)')?'INOV':'Recorrente')}));
 }
 async function loadAcoes(){
-  const d=await spRead(`${SP}/_api/web/lists/getbytitle('Factorial_Projetos')/items?$select=*&$orderby=Title asc&$top=1000`);
-  acoes=d.d.results.map(r=>({id:r.Id,nome:r.Title||'',estado:r.Estado||'',dataInicio:r.DataInicio?r.DataInicio.split('T')[0]:'',dataFim:r.DataFim?r.DataFim.split('T')[0]:'',projetoId:r.ProjetoId||null,dep:r.Departamento||'',tipoFJ:r.Tipo_FJ||(r.Title?.includes('(INOV)')?'INOV':'Recorrente'),factId:r.FactorialID||''}));
+  // Acoes = lista manual criada na plataforma, filho de Factorial_Projetos
+  const d=await spRead(`${SP}/_api/web/lists/getbytitle('Acoes')/items?$select=*,Responsavel/Title&$expand=Responsavel&$orderby=Title asc&$top=1000`);
+  acoes=d.d.results.map(r=>({id:r.Id,nome:r.Title||'',estado:r.Estado||'Ativo',dataInicio:r.DataInicio?r.DataInicio.split('T')[0]:'',dataFim:r.DataFim?r.DataFim.split('T')[0]:'',projetoId:r.ProjetoId||null,dep:r.Departamento||'',tipoFJ:r.TipoAcao||'Recorrente',responsavel:r.Responsavel?.Title||'',notas:r.Notas||''}));
 }
 async function loadTarefas(){
   let all=[];
@@ -705,15 +735,18 @@ async function loadPlanoTrim(){
 
 /* ===== DROPDOWNS ===== */
 function populateDrops(){
+  // Projetos = Factorial_Projetos
   const po=projetos.map(p=>`<option value="${p.id}">${p.nome}</option>`).join('');
-  ['ft-proj','fk-proj'].forEach(id=>{const e=el(id);if(e)e.innerHTML='<option value="">Nenhum</option>'+po;});
+  ['ft-proj','fk-proj','fa-proj'].forEach(id=>{const e=el(id);if(e)e.innerHTML='<option value="">Selecionar...</option>'+po;});
   const ffkd=el('ff-kd-proj');if(ffkd)ffkd.innerHTML='<option value="">Todos os projetos</option>'+po;
+  const ffap=el('ff-ac-proj');if(ffap)ffap.innerHTML='<option value="">Todos os projetos</option>'+po;
+  // Ações = lista Acoes (manual)
+  const ao=acoes.map(a=>`<option value="${a.id}">${a.nome}</option>`).join('');
+  const ftA=el('ftar-acao');if(ftA)ftA.innerHTML='<option value="">Nenhuma</option>'+ao;
+  // KPI dropdown
   const ko=kpdefs.filter(k=>k.ativo).map(k=>`<option value="${k.id}">${k.nome}</option>`).join('');
   const frKpi=el('fr-kpi');if(frKpi)frKpi.innerHTML='<option value="">Selecionar KPI...</option>'+ko;
   const ffKr=el('ff-kr-kpi');if(ffKr)ffKr.innerHTML='<option value="">Todos os KPIs</option>'+ko;
-  // Ações dropdown for tarefa form
-  const ao=acoes.map(a=>`<option value="${a.id}">${a.nome}</option>`).join('');
-  const ftA=el('ftar-acao');if(ftA)ftA.innerHTML='<option value="">Nenhuma</option>'+ao;
 }
 function loadAcoesForProj(projId,targetId,currId=null){
   const e=el(targetId);if(!e)return;
@@ -724,8 +757,10 @@ function loadAcoesForProj(projId,targetId,currId=null){
 /* ===== DASHBOARD ===== */
 function renderDash(){
   const w=isoWeek(new Date()),y=new Date().getFullYear();
-  el('s-proj').textContent=projetos.filter(p=>p.estado==='Ativo').length;
-  el('s-inov').textContent=acoes.filter(a=>a.tipoFJ==='INOV'||a.nome.includes('(INOV)')).length;
+  // Projetos ativos = Factorial_Projetos com estado active
+  el('s-proj').textContent=projetos.filter(p=>p.estado==='active'||p.estado==='Ativo').length;
+  // Ações INOV = ações criadas na plataforma com TipoAcao=INOV ou projetos do Factorial com (INOV)
+  el('s-inov').textContent=acoes.filter(a=>a.tipoFJ==='INOV').length+projetos.filter(p=>p.tipoFJ==='INOV'||p.nome.includes('(INOV)')).length;
   el('s-tsem').textContent=tarefas.filter(t=>t.semana==w&&t.anoFJ==y).length;
   el('s-kpi').textContent=kpdefs.filter(k=>k.ativo).length;
   // RAG
@@ -779,13 +814,16 @@ function renderHier(){
             <span class="rag rag-${r}"></span>
             <span class="hier-acao-name">${a.nome}</span>
             ${bdg(a.tipoFJ==='INOV'?'b-inov':'b-rec',a.tipoFJ||'Rec')}
+            ${depB(a.dep)}
             <span style="font-size:11px;color:var(--tx3)">${conc}/${ts.length} tarefas</span>
+            <button class="btn btn-sm" onclick="event.stopPropagation();openAcaoForm(${p.id},${a.id})">Editar</button>
+            <button class="btn btn-sm btn-danger" onclick="event.stopPropagation();delAcao(${a.id})">✕</button>
             <button class="btn btn-sm btn-or" onclick="event.stopPropagation();openTarFormForAcao(${a.id})">+ Tarefa</button>
           </div>
           <div class="hier-tasks" id="hier-t-${a.id}">
             <div id="hier-t-content-${a.id}"></div>
           </div>`;
-        }).join(''):`<div style="padding:12px 36px;font-size:13px;color:var(--tx3)">Sem ações atribuídas a este projeto.</div>`}
+        }).join(''):`<div style="padding:12px 36px;font-size:13px;color:var(--tx3)">Sem ações. <button class="btn btn-sm btn-primary" onclick="openAcaoForm(${p.id})">+ Criar ação</button></div>`}
       </div>
     </div>`;
   }).join('');
@@ -822,6 +860,49 @@ function toggleHierAcao(acaoId){
 }
 function openTarFormForAcao(acaoId){
   openTarForm();sv2('ftar-acao',acaoId);
+}
+
+/* ===== AÇÕES CRUD ===== */
+let editAcaoId=null;
+function openAcaoForm(projId,acaoId){
+  editAcaoId=acaoId||null;
+  el('frm-acao-ov').classList.add('open');
+  el('fa-proj').innerHTML='<option value="">Selecionar...</option>'+projetos.map(p=>`<option value="${p.id}">${p.nome}</option>`).join('');
+  if(acaoId){
+    const a=acoes.find(x=>x.id===acaoId);if(!a)return;
+    el('frm-acao-title').textContent='Editar ação';
+    sv2('fa-nome',a.nome);sv2('fa-proj',a.projetoId||'');sv2('fa-tipo',a.tipoFJ||'Recorrente');
+    sv2('fa-dep',a.dep||'');sv2('fa-estado',a.estado||'Ativo');
+    sv2('fa-inicio',a.dataInicio||'');sv2('fa-fim',a.dataFim||'');
+    sv2('fa-resp',a.responsavel||'');sv2('fa-notas',a.notas||'');
+  }else{
+    el('frm-acao-title').textContent='Nova ação';
+    sv2('fa-nome','');sv2('fa-proj',projId||'');sv2('fa-tipo','Recorrente');
+    sv2('fa-dep','');sv2('fa-estado','Ativo');sv2('fa-inicio','');sv2('fa-fim','');
+    sv2('fa-resp','');sv2('fa-resp-email','');sv2('fa-notas','');
+  }
+}
+function closeAcaoForm(){el('frm-acao-ov').classList.remove('open');editAcaoId=null;}
+async function saveAcao(){
+  const nome=gv('fa-nome').trim();if(!nome){alert('Nome obrigatório.');return;}
+  const pid=gv('fa-proj');if(!pid){alert('Seleciona o projeto do Factorial.');return;}
+  const btn=el('save-acao-btn');btn.textContent='A guardar...';btn.disabled=true;
+  try{
+    const body={__metadata:{type:'SP.Data.AcoesListItem'},Title:nome,TipoAcao:gv('fa-tipo'),Departamento:gv('fa-dep'),Estado:gv('fa-estado'),Notas:gv('fa-notas'),ProjetoId:parseInt(pid)};
+    if(gv('fa-inicio'))body.DataInicio=gv('fa-inicio')+'T00:00:00Z';
+    if(gv('fa-fim'))body.DataFim=gv('fa-fim')+'T00:00:00Z';
+    const email=gv('fa-resp-email');
+    if(email){const uid=await getSpUID(email);if(uid)body.ResponsavelId=uid;}
+    if(editAcaoId)await spWrite(`${SP}/_api/web/lists/getbytitle('Acoes')/items(${editAcaoId})`,body,'MERGE','*');
+    else await spWrite(`${SP}/_api/web/lists/getbytitle('Acoes')/items`,body,'POST');
+    closeAcaoForm();await loadAcoes();renderHier();populateDrops();showNotif('Ação guardada!','success');
+  }catch(e){showNotif('Erro: '+e.message,'error');}
+  btn.textContent='Guardar';btn.disabled=false;
+}
+async function delAcao(id){
+  if(!confirm('Eliminar esta ação?'))return;
+  try{await spWrite(`${SP}/_api/web/lists/getbytitle('Acoes')/items(${id})`,null,'DELETE');await loadAcoes();renderHier();populateDrops();showNotif('Eliminado.','success');}
+  catch(e){showNotif('Erro: '+e.message,'error');}
 }
 
 /* ===== GANTT ===== */
@@ -1054,7 +1135,7 @@ async function saveTarefa(){
     const data=gv('ftar-data');
     const semana=data?isoWeek(new Date(data)):viewWeek;
     const anoFJ=data?new Date(data).getFullYear():viewYear;
-    const body={__metadata:{type:'SP.Data.Factorial_x005f_TarefasListItem'},Title:desc,Origem:gv('ftar-origem'),Prioridade:gv('ftar-prior'),Semana:semana,AnoFJ:anoFJ,Estado:gv('ftar-estado')};
+    const body={__metadata:{type:'SP.Data.Factorial_x005f_TarefasListItem'},Title:desc,Origem:gv('ftar-origem'),Prioridade:gv('ftar-prior'),Semana:semana,AnoFJ:anoFJ,Estado:gv('ftar-estado'),Departamento:gv('ftar-dep')||''};
     if(data)body.DataLimite=data+'T00:00:00Z';
     const aid=gv('ftar-acao');if(aid)body.AcaoId=parseInt(aid);
     const email=gv('ftar-email');
@@ -1283,6 +1364,7 @@ document.addEventListener('click',e=>{
   if(e.target===el('frm-trim-ov'))closeTrimForm();
   if(e.target===el('frm-kdef-ov'))closeKdefForm();
   if(e.target===el('frm-kreg-ov'))closeKregForm();
+  if(e.target===el('frm-acao-ov'))closeAcaoForm();
 });
 
 /* ===== BOOT ===== */
