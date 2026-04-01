@@ -712,9 +712,9 @@ async function loadAcoes(){
 }
 async function loadTarefas(){
   let all=[];
-  // Factorial_Tarefas — sem expand, responsavel vem de campo texto se existir
+  // Factorial_Tarefas
   try{
-    const d=await spRead(`${SP}/_api/web/lists/getbytitle('Factorial_Tarefas')/items?$select=Id,Title,Estado,DataLimite,Semana,AnoFJ,Origem,Prioridade,ProjetoId,AcaoId,Departamento,ReuniaoID,AttachmentFiles&$expand=AttachmentFiles&$orderby=DataLimite asc&$top=2000`);
+    const d=await spRead(`${SP}/_api/web/lists/getbytitle('Factorial_Tarefas')/items?$select=Id,Title,Estado,DataLimite,Semana,AnoFJ,Origem,Prioridade,ProjetoId,AcaoId,Departamento,ReuniaoID&$orderby=DataLimite asc&$top=2000`);
     const ft=d.d.results.map(r=>({
       id:'f_'+r.Id,spId:r.Id,titulo:r.Title||'',
       estado:r.Estado||'todo',
@@ -727,33 +727,17 @@ async function loadTarefas(){
       responsavel:'',responsavelEmail:'',
       dep:r.Departamento||'',
       lista:'Factorial_Tarefas',
-      attachments:(r.AttachmentFiles?.results||[]).map(a=>({name:a.FileName,url:a.ServerRelativeUrl}))
+      attachments:[]
     }));
     all=[...all,...ft];
-    console.log(`✓ Factorial_Tarefas: ${ft.length} tarefas`);
-  }catch(e){console.warn('Factorial_Tarefas error:',e.message);}
+    console.log(`✓ Factorial_Tarefas: ${ft.length} tarefas carregadas`);
+    if(ft.length>0)console.log('Exemplo de tarefa:', JSON.stringify(ft[0]));
+  }catch(e){console.error('ERRO Factorial_Tarefas:',e.message);}
 
-  // FJ_Tarefas (tarefas de reuniões externas)
-  try{
-    const d=await spRead(`${SP}/_api/web/lists/getbytitle('FJ_Tarefas')/items?$select=*,AttachmentFiles&$expand=AttachmentFiles&$orderby=DataLimite asc&$top=2000`);
-    const rt=d.d.results.map(r=>({
-      id:'r_'+r.Id,spId:r.Id,
-      titulo:r.Title||'',
-      estado:r.Estado||'todo',
-      dataLimite:r.DataLimite?r.DataLimite.split('T')[0]:'',
-      semana:r.Semana||null,anoFJ:r.Ano||null,
-      origem:'Reunião',
-      prioridade:r.Prioridade||'Média',
-      projetoId:null,acaoId:null,
-      responsavel:r.Responsavel||r.Descricao||'',
-      responsavelEmail:'',
-      dep:r.Departamento||'',
-      lista:'FJ_Tarefas',
-      attachments:(r.AttachmentFiles?.results||[]).map(a=>({name:a.FileName,url:a.ServerRelativeUrl}))
-    }));
-    all=[...all,...rt];
-    console.log(`✓ FJ_Tarefas: ${rt.length} tarefas`);
-  }catch(e){console.warn('FJ_Tarefas não encontrada (normal se não existir):',e.message);}
+  // Tarefas criadas localmente neste site (Ad-hoc + Reuniões)
+  // Estas estão guardadas na própria Factorial_Tarefas com Origem = 'Ad-hoc' ou 'Reunião'
+  // Nota: tarefas da app de Gestão de Reuniões (outro site) precisam de ser migradas
+  // ou criadas directamente aqui com Origem = 'Reunião'
 
   // Calcular semana ISO a partir de dataLimite onde semana/ano estejam em falta
   all=all.map(t=>{
@@ -764,7 +748,7 @@ async function loadTarefas(){
     return t;
   });
   tarefas=all;
-  console.log(`Total tarefas carregadas: ${tarefas.length}`);
+  console.log(`Total tarefas: ${tarefas.length} | Com projeto: ${tarefas.filter(t=>t.projetoId).length} | Sem projeto: ${tarefas.filter(t=>!t.projetoId).length}`);
 }
 async function loadKPIDefs(){
   const d=await spRead(`${SP}/_api/web/lists/getbytitle('KPI_Definicoes')/items?$select=*&$orderby=Title asc&$top=500`);
@@ -1256,26 +1240,29 @@ async function saveTarefa(){
   const btn=el('save-tar-btn');btn.textContent='A guardar...';btn.disabled=true;
   try{
     const data=gv('ftar-data');
-    const semana=data?isoWeek(new Date(data)):viewWeek;
-    const anoFJ=data?new Date(data).getFullYear():viewYear;
-    const body={__metadata:{type:'SP.Data.Factorial_x005f_TarefasListItem'},Title:desc,Origem:gv('ftar-origem'),Prioridade:gv('ftar-prior'),Semana:semana,AnoFJ:anoFJ,Estado:gv('ftar-estado'),Departamento:gv('ftar-dep')||''};
+    const semana=data?isoWeek(new Date(data+'T12:00:00')):viewWeek;
+    const anoFJ=data?new Date(data+'T12:00:00').getFullYear():viewYear;
+    const body={__metadata:{type:'SP.Data.Factorial_x005f_TarefasListItem'},
+      Title:desc,
+      Origem:gv('ftar-origem'),
+      Prioridade:gv('ftar-prior'),
+      Semana:semana,
+      AnoFJ:anoFJ,
+      Estado:gv('ftar-estado'),
+      Departamento:gv('ftar-dep')||''
+    };
     if(data)body.DataLimite=data+'T00:00:00Z';
     const aid=gv('ftar-acao');if(aid)body.AcaoId=parseInt(aid);
-    const email=gv('ftar-email');
-    if(email){const uid=await getSpUID(email);if(uid)body.ResponsavelId=uid;}
     let itemId=null;
     if(editTarId){
       const t=tarefas.find(x=>x.id===editTarId);
-      if(t)await spWrite(`${SP}/_api/web/lists/getbytitle('${t.lista}')/items(${t.spId})`,body,'MERGE','*');
-      itemId=t?.spId;
+      if(t){await spWrite(`${SP}/_api/web/lists/getbytitle('${t.lista}')/items(${t.spId})`,body,'MERGE','*');itemId=t.spId;}
     }else{
       const r=await spWrite(`${SP}/_api/web/lists/getbytitle('Factorial_Tarefas')/items`,body,'POST');
-      const d=await r.json();itemId=d.d?.Id;
+      try{const d=await r.json();itemId=d.d?.Id;}catch(e){}
     }
-    const files=el('ftar-file')?.files;
-    if(files&&itemId){for(const f of files)await spUpload('Factorial_Tarefas',itemId,f);}
     closeTarForm();await loadTarefas();renderSem();renderHier();renderDash();showNotif('Tarefa guardada!','success');
-  }catch(e){showNotif('Erro: '+e.message,'error');}
+  }catch(e){showNotif('Erro: '+e.message,'error');console.error(e);}
   btn.textContent='Guardar';btn.disabled=false;
 }
 
