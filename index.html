@@ -338,7 +338,7 @@ tr.done-row td:nth-child(2){text-decoration:line-through}
         <div class="toolbar">
           <select class="flt" id="ff-g-dep" onchange="renderGantt()"><option value="">Todos os departamentos</option><option>CAdm</option><option>Gestão</option><option>Op.Norte</option><option>Op.Sul</option><option>Financeiro</option><option>Impacto</option></select>
           <select class="flt" id="ff-g-ano" onchange="renderGantt()"><option value="2025">2025</option><option value="2026" selected>2026</option><option value="2027">2027</option><option value="2028">2028</option></select>
-          <select class="flt" id="ff-g-modo" onchange="renderGantt()"><option value="mensal">Vista mensal</option><option value="trimestral">Vista trimestral</option></select>
+          <select class="flt" id="ff-g-modo" onchange="renderGantt()"><option value="mensal">Vista mensal</option><option value="trimestral">Vista trimestral</option><option value="semanal">Vista semanal</option><option value="diario">Vista diária</option></select>
         </div>
         <div id="gantt-container"></div>
       </div>
@@ -696,8 +696,10 @@ async function loadProjetos(){
 }
 async function loadAcoes(){
   // Acoes = lista manual criada na plataforma, filho de Factorial_Projetos
-  const d=await spRead(`${SP}/_api/web/lists/getbytitle('Acoes')/items?$select=*,Responsavel/Title&$expand=Responsavel&$orderby=Title asc&$top=1000`);
-  acoes=d.d.results.map(r=>({id:r.Id,nome:r.Title||'',estado:r.Estado||'Ativo',dataInicio:r.DataInicio?r.DataInicio.split('T')[0]:'',dataFim:r.DataFim?r.DataFim.split('T')[0]:'',projetoId:r.ProjetoId||null,dep:r.Departamento||'',tipoFJ:r.TipoAcao||'Recorrente',responsavel:r.Responsavel?.Title||'',notas:r.Notas||''}));
+  try{
+    const d=await spRead(`${SP}/_api/web/lists/getbytitle('Acoes')/items?$select=*&$orderby=Title asc&$top=1000`);
+    acoes=d.d.results.map(r=>({id:r.Id,nome:r.Title||'',estado:r.Estado||'Ativo',dataInicio:r.DataInicio?r.DataInicio.split('T')[0]:'',dataFim:r.DataFim?r.DataFim.split('T')[0]:'',projetoId:r.ProjetoId||null,dep:r.Departamento||'',tipoFJ:r.TipoAcao||'Recorrente',responsavel:'',notas:r.Notas||''}));
+  }catch(e){console.warn('Acoes list error:',e.message);acoes=[];}
 }
 async function loadTarefas(){
   let all=[];
@@ -788,25 +790,28 @@ function renderHier(){
   const dep=gv('ff-h-dep'),tipo=gv('ff-h-tipo');
   const c=el('hier-container');
   const projs=projetos.filter(p=>!dep||p.dep===dep);
-  if(!projs.length){c.innerHTML='<div class="empty">Sem projetos.</div>';return;}
+  if(!projs.length){c.innerHTML='<div class="empty">Sem projetos carregados do Factorial.</div>';return;}
   c.innerHTML=projs.map(p=>{
     const pAcoes=acoes.filter(a=>String(a.projetoId)===String(p.id)&&(!tipo||a.tipoFJ===tipo));
-    const tarProj=tarefas.filter(t=>String(t.projetoId)===String(p.id));
-    const concProj=tarProj.filter(t=>t.estado==='Concluída').length;
-    const pct=tarProj.length?Math.round((concProj/tarProj.length)*100):null;
-    const rag=pAcoes.length?(['v','a','r'].find(r=>pAcoes.some(a=>calcRag(a.id)===r))||'c'):'c';
+    // Tarefas não afetas a nenhuma ação mas com projetoId deste projeto, OU sem ação e sem projeto (mostrar em todos)
+    const tarSemAcao=tarefas.filter(t=>!t.acaoId&&(String(t.projetoId)===String(p.id)));
+    const tarTotal=tarefas.filter(t=>String(t.projetoId)===String(p.id)||pAcoes.some(a=>String(t.acaoId)===String(a.id)));
+    const concTotal=tarTotal.filter(t=>t.estado==='Concluída').length;
+    const pct=tarTotal.length?Math.round((concTotal/tarTotal.length)*100):null;
+    const rag=pAcoes.length?(['r','a','v'].reduce((best,r)=>pAcoes.some(a=>calcRag(a.id)===r)?r:best,'c')):'c';
+    const tipoFJ=p.tipoFJ||(p.nome.includes('(INOV)')?'INOV':'Recorrente');
     return`<div class="hier-proj">
       <div class="hier-proj-hdr" onclick="toggleHier(${p.id})">
         <span class="rag rag-${rag}"></span>
         <span style="font-size:14px;font-weight:700;color:var(--g1);flex:1">${p.nome}</span>
+        ${bdg(tipoFJ==='INOV'?'b-inov':'b-rec',tipoFJ)}
         ${depB(p.dep)}
-        ${estB(p.estado)}
-        ${pct!==null?`<span style="font-size:12px;color:var(--tx2);background:var(--bg3);border-radius:6px;padding:2px 8px">${pct}% concluído</span>`:''}
-        <span style="font-size:11px;color:var(--tx3)">${pAcoes.length} ações</span>
+        <span style="font-size:11px;background:var(--bg3);border-radius:6px;padding:2px 8px;color:var(--tx2)">${pAcoes.length} ações · ${tarTotal.length} tarefas${pct!==null?' · '+pct+'% conc.':''}</span>
+        <button class="btn btn-sm btn-primary" style="font-size:11px" onclick="event.stopPropagation();openAcaoForm(${p.id})">+ Ação</button>
         <svg id="hier-arrow-${p.id}" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" style="transition:transform .2s"><path d="M4 6l4 4 4-4"/></svg>
       </div>
       <div class="hier-acao-wrap" id="hier-acoes-${p.id}">
-        ${pAcoes.length?pAcoes.map(a=>{
+        ${pAcoes.map(a=>{
           const ts=tarefas.filter(t=>String(t.acaoId)===String(a.id));
           const conc=ts.filter(t=>t.estado==='Concluída').length;
           const r=calcRag(a.id);
@@ -814,7 +819,7 @@ function renderHier(){
             <span class="rag rag-${r}"></span>
             <span class="hier-acao-name">${a.nome}</span>
             ${bdg(a.tipoFJ==='INOV'?'b-inov':'b-rec',a.tipoFJ||'Rec')}
-            ${depB(a.dep)}
+            ${a.dep?depB(a.dep):''}
             <span style="font-size:11px;color:var(--tx3)">${conc}/${ts.length} tarefas</span>
             <button class="btn btn-sm" onclick="event.stopPropagation();openAcaoForm(${p.id},${a.id})">Editar</button>
             <button class="btn btn-sm btn-danger" onclick="event.stopPropagation();delAcao(${a.id})">✕</button>
@@ -823,10 +828,54 @@ function renderHier(){
           <div class="hier-tasks" id="hier-t-${a.id}">
             <div id="hier-t-content-${a.id}"></div>
           </div>`;
-        }).join(''):`<div style="padding:12px 36px;font-size:13px;color:var(--tx3)">Sem ações. <button class="btn btn-sm btn-primary" onclick="openAcaoForm(${p.id})">+ Criar ação</button></div>`}
+        }).join('')}
+        ${tarSemAcao.length?`
+          <div style="border-top:0.5px solid var(--bd);background:var(--bg2)">
+            <div style="padding:8px 16px 6px;font-size:11px;font-weight:600;color:var(--tx3);text-transform:uppercase;letter-spacing:.05em;display:flex;align-items:center;gap:8px">
+              Tarefas sem ação atribuída (${tarSemAcao.length})
+              <button class="btn btn-sm" onclick="openTarFormForProj(${p.id})" style="font-size:10px">+ Tarefa</button>
+            </div>
+            <table style="width:100%;border-collapse:collapse">
+              <colgroup><col style="width:4%"><col style="width:36%"><col style="width:20%"><col style="width:15%"><col style="width:10%"><col style="width:10%"><col style="width:5%"></colgroup>
+              <tbody>
+              ${tarSemAcao.map(t=>`<tr class="${t.estado==='Concluída'?'done-row':''}" style="border-top:0.5px solid var(--bd)">
+                <td style="padding:7px 11px"><input type="checkbox" ${t.estado==='Concluída'?'checked':''} onchange="toggleTar('${t.id}',this.checked)" style="cursor:pointer;accent-color:var(--g5);width:14px;height:14px"></td>
+                <td style="font-size:12px;font-weight:500;padding:7px 4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${t.titulo}</td>
+                <td style="font-size:11px;color:var(--tx2);padding:7px 4px">${t.responsavel||'—'}</td>
+                <td style="font-size:11px;padding:7px 4px">${fd(t.dataLimite)}</td>
+                <td style="padding:7px 4px">${estB(t.prioridade)}</td>
+                <td style="padding:7px 4px">${estB(t.estado)}</td>
+                <td style="padding:7px 4px"><button class="btn btn-sm" onclick="openTarFormEdit('${t.id}')">✎</button></td>
+              </tr>`).join('')}
+              </tbody>
+            </table>
+          </div>`:''}
+        ${!pAcoes.length&&!tarSemAcao.length?`<div style="padding:12px 24px;font-size:13px;color:var(--tx3)">Sem ações nem tarefas. <button class="btn btn-sm btn-primary" onclick="openAcaoForm(${p.id})">+ Criar ação</button></div>`:''}
       </div>
     </div>`;
   }).join('');
+  // Tarefas completamente sem projeto e sem ação
+  const tarSemTudo=tarefas.filter(t=>!t.acaoId&&!t.projetoId);
+  if(tarSemTudo.length){
+    const div=document.createElement('div');
+    div.style.cssText='margin-top:12px;background:var(--bg2);border:0.5px solid var(--bd);border-radius:var(--rl);overflow:hidden';
+    div.innerHTML=`<div style="padding:12px 16px;background:var(--bg3);font-size:13px;font-weight:600;color:var(--tx2);display:flex;align-items:center;gap:8px">
+      Tarefas sem projeto nem ação (${tarSemTudo.length})
+      <button class="btn btn-sm btn-primary" onclick="openTarForm()" style="font-size:11px">+ Nova tarefa</button>
+    </div>
+    <table style="width:100%;border-collapse:collapse">
+      <tbody>${tarSemTudo.map(t=>`<tr class="${t.estado==='Concluída'?'done-row':''}" style="border-top:0.5px solid var(--bd)">
+        <td style="padding:8px 11px;width:4%"><input type="checkbox" ${t.estado==='Concluída'?'checked':''} onchange="toggleTar('${t.id}',this.checked)" style="cursor:pointer;accent-color:var(--g5);width:14px;height:14px"></td>
+        <td style="font-size:13px;font-weight:500;padding:8px 4px">${t.titulo}</td>
+        <td style="font-size:12px;color:var(--tx2);padding:8px 4px">${t.responsavel||'—'}</td>
+        <td style="font-size:12px;padding:8px 4px">${fd(t.dataLimite)}</td>
+        <td style="padding:8px 4px">${estB(t.prioridade)}</td>
+        <td style="padding:8px 4px">${estB(t.estado)}</td>
+        <td style="padding:8px 4px"><button class="btn btn-sm" onclick="openTarFormEdit('${t.id}')">✎</button></td>
+      </tr>`).join('')}</tbody>
+    </table>`;
+    c.appendChild(div);
+  }
 }
 function toggleHier(projId){
   const w=el(`hier-acoes-${projId}`);const arr=el(`hier-arrow-${projId}`);
@@ -858,9 +907,8 @@ function toggleHierAcao(acaoId){
     `;
   }
 }
-function openTarFormForAcao(acaoId){
-  openTarForm();sv2('ftar-acao',acaoId);
-}
+function openTarFormForAcao(acaoId){openTarForm();sv2('ftar-acao',acaoId);}
+function openTarFormForProj(projId){openTarForm();/* projeto fica vazio, ação vazia — tarefa vai aparecer na secção sem ação */}
 
 /* ===== AÇÕES CRUD ===== */
 let editAcaoId=null;
@@ -911,45 +959,75 @@ const GANTT_COLORS=['#1A5E3B','#2E7D52','#0F6E56','#534AB7','#D85A30','#0C447C',
 function renderGantt(){
   const dep=gv('ff-g-dep'),ano=parseInt(gv('ff-g-ano')||new Date().getFullYear()),modo=gv('ff-g-modo')||'mensal';
   const projs=projetos.filter(p=>!dep||p.dep===dep);
-  const cols=modo==='mensal'?12:4;
-  const colW=Math.max(60,Math.floor(800/cols));
-  const lblW=200;
+  const lblW=220;
+  let cols,colW,labels,unitMs,rangeStart,rangeEnd;
+  const today=new Date();today.setHours(0,0,0,0);
+
+  if(modo==='mensal'){
+    cols=12;colW=70;
+    rangeStart=new Date(ano,0,1);rangeEnd=new Date(ano,11,31);
+    labels=MONTHS;
+    unitMs=(rangeEnd-rangeStart)/cols;
+  }else if(modo==='trimestral'){
+    cols=4;colW=180;
+    rangeStart=new Date(ano,0,1);rangeEnd=new Date(ano,11,31);
+    labels=['Q1','Q2','Q3','Q4'];
+    unitMs=(rangeEnd-rangeStart)/cols;
+  }else if(modo==='semanal'){
+    // Mostrar 13 semanas (trimestre) a partir da semana actual
+    const w=isoWeek(today);const wStart=weekRange(Math.max(1,w-1),ano).start;
+    rangeStart=wStart;cols=13;colW=80;
+    rangeEnd=new Date(rangeStart.getTime()+cols*7*86400000);
+    labels=Array.from({length:cols},(_,i)=>{const ws=new Date(rangeStart.getTime()+i*7*86400000);return`S${isoWeek(ws)}`;});
+    unitMs=7*86400000;
+  }else if(modo==='diario'){
+    // 30 dias a partir de hoje
+    rangeStart=new Date(today);cols=30;colW=38;
+    rangeEnd=new Date(rangeStart.getTime()+cols*86400000);
+    labels=Array.from({length:cols},(_,i)=>{const d=new Date(rangeStart.getTime()+i*86400000);return`${d.getDate()}/${d.getMonth()+1}`;});
+    unitMs=86400000;
+  }
+
   const totalW=lblW+cols*colW;
-  const yearStart=new Date(ano,0,1);const yearEnd=new Date(ano,11,31);
-  const dayMs=86400000;const yearDays=(yearEnd-yearStart)/dayMs+1;
-  const todayX=lblW+Math.max(0,Math.min(((new Date()-yearStart)/dayMs/yearDays)*cols*colW,cols*colW));
+  const rangeMs=rangeEnd-rangeStart;
+  const todayX=lblW+Math.max(0,Math.min(((today-rangeStart)/rangeMs)*(cols*colW),cols*colW));
+
   let rows=[];
   projs.forEach((p,pi)=>{
     const color=GANTT_COLORS[pi%GANTT_COLORS.length];
-    rows.push({type:'proj',label:p.nome,color,id:p.id});
-    const pAcoes=acoes.filter(a=>String(a.projetoId)===String(p.id)&&(!dep||a.dep===dep||!a.dep));
+    // Calcular span do projeto a partir das ações
+    const pAcoes=acoes.filter(a=>String(a.projetoId)===String(p.id));
+    let ps=pAcoes.reduce((min,a)=>a.dataInicio&&new Date(a.dataInicio)<min?new Date(a.dataInicio):min,new Date(9999,0,1));
+    let pe=pAcoes.reduce((max,a)=>a.dataFim&&new Date(a.dataFim)>max?new Date(a.dataFim):max,new Date(0));
+    if(ps.getFullYear()===9999)ps=null;if(pe.getFullYear()===1970)pe=null;
+    rows.push({type:'proj',label:p.nome,color,start:ps,end:pe,id:p.id});
     pAcoes.forEach(a=>{
-      let start=a.dataInicio?new Date(a.dataInicio):null;
-      let end=a.dataFim?new Date(a.dataFim):null;
-      rows.push({type:'acao',label:a.nome,color,start,end,id:a.id});
+      const s=a.dataInicio?new Date(a.dataInicio):null;
+      const e=a.dataFim?new Date(a.dataFim):null;
+      rows.push({type:'acao',label:a.nome,color,start:s,end:e,id:a.id});
     });
   });
+
+  function barX(d){return Math.max(0,((d-rangeStart)/rangeMs)*(cols*colW));}
+  function barW(s,e){return Math.max(4,barX(e)-barX(s));}
+
   const headerHtml=`<div class="gantt-header">
-    <div class="gantt-lbl-col">${ano}</div>
+    <div class="gantt-lbl-col" style="width:${lblW}px">${modo==='semanal'?'Semanas':modo==='diario'?'Dias':ano}</div>
     <div class="gantt-months" style="width:${cols*colW}px">
-      ${Array.from({length:cols},(_,i)=>{
-        const lbl=modo==='mensal'?MONTHS[i]:`Q${i+1}`;
-        return`<div class="gantt-month" style="width:${colW}px">${lbl}</div>`;
-      }).join('')}
+      ${labels.map((l,i)=>`<div class="gantt-month" style="width:${colW}px;font-size:${colW<50?'9px':'11px'}">${l}</div>`).join('')}
     </div>
   </div>`;
+
   const rowsHtml=rows.map(row=>{
     let barHtml='';
-    if(row.type==='acao'&&row.start&&row.end){
-      const s=Math.max(0,(row.start-yearStart)/dayMs/yearDays);
-      const e=Math.min(1,(row.end-yearStart)/dayMs/yearDays);
-      if(e>s){
-        const bx=s*cols*colW;const bw=(e-s)*cols*colW;
-        barHtml=`<div class="gantt-bar" style="left:${bx}px;width:${Math.max(bw,4)}px;background:${row.color}" title="${row.label}"></div>`;
-      }
+    if(row.start&&row.end&&row.end>rangeStart&&row.start<rangeEnd){
+      const s=Math.max(0,barX(row.start));
+      const w2=Math.min(barW(row.start,row.end),cols*colW-s);
+      const opacity=row.type==='proj'?0.35:0.8;
+      barHtml=`<div class="gantt-bar" style="left:${s}px;width:${w2}px;background:${row.color};opacity:${opacity};height:${row.type==='proj'?'10px':'18px'}" title="${row.label}"></div>`;
     }
     return`<div class="gantt-row ${row.type==='proj'?'proj-row':''}">
-      <div class="gantt-row-lbl ${row.type==='acao'?'sub':''}" title="${row.label}">${row.label}</div>
+      <div class="gantt-row-lbl ${row.type==='acao'?'sub':''}" style="width:${lblW}px" title="${row.label}">${row.label}</div>
       <div class="gantt-cells" style="width:${cols*colW}px">
         ${Array.from({length:cols},(_,i)=>`<div style="position:absolute;left:${i*colW}px;top:0;bottom:0;width:0.5px;background:var(--bd)"></div>`).join('')}
         <div class="gantt-today" style="left:${todayX-lblW}px"></div>
@@ -957,7 +1035,8 @@ function renderGantt(){
       </div>
     </div>`;
   }).join('');
-  el('gantt-container').innerHTML=`<div class="gantt-wrap" style="min-width:${totalW}px">${headerHtml}${rowsHtml||'<div class="empty">Sem dados para mostrar. Adiciona projetos e atribui ações com datas de início e fim no Factorial.</div>'}</div>`;
+
+  el('gantt-container').innerHTML=`<div class="gantt-wrap" style="overflow-x:auto"><div style="min-width:${totalW}px">${headerHtml}${rowsHtml||'<div class="empty">Sem dados. Adiciona ações com datas de início e fim.</div>'}</div></div>`;
 }
 
 /* ===== PLANO TRIMESTRAL ===== */
